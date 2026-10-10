@@ -50,7 +50,12 @@ authorization, and old delegation records do not override the human audience.
 
 A connection choice never changes the harness, model, or provider routing.
 Changing those separately may make a binding incompatible; saving then requires
-a compatible choice. Agent configuration cannot grant access to another account.
+a compatible choice. When switching to a harness without managed AI connection
+support (for example, the external OMP adapter), the inherited binding is removed
+and that runtime uses its own authentication. An explicitly selected different
+incompatible binding still fails validation. Compatible bindings and native
+runner provider checks remain unchanged. Agent configuration cannot grant access
+to another account.
 
 Personal defaults are unique per company, user, and provider. A Claude bot can use one user’s subscription and another user’s API key without changing its harness or model. Explicit shared selections remain pinned to the selected account and method.
 The first successful personal connection sets a default only when none exists.

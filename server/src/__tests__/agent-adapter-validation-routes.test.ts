@@ -622,6 +622,129 @@ describe("agent routes adapter validation", () => {
     expect(mockAgentService.create).not.toHaveBeenCalled();
   });
 
+  describe("managed AI bindings during adapter transitions", () => {
+    const openAiBinding = {
+      provider: "openai",
+      method: "subscription",
+      mode: "responsible_user",
+    };
+
+    beforeEach(async () => {
+      const existing = await mockAgentService.getById();
+      mockAgentService.getById.mockResolvedValue({
+        ...existing,
+        runtimeConfig: {
+          aiConnection: openAiBinding,
+          heartbeat: { enabled: false, intervalSec: 300 },
+        },
+      });
+      // The registry must be imported after resetModules so it shares the route's module instance.
+      const { registerServerAdapter } = await import("../adapters/index.js");
+      registerServerAdapter(externalAdapter);
+    });
+
+    it.each([
+      { name: "omitted runtime config", patch: {}, intervalSec: 300 },
+      {
+        name: "omitted binding",
+        patch: { runtimeConfig: { heartbeat: { enabled: false, intervalSec: 600 } } },
+        intervalSec: 600,
+      },
+      {
+        name: "unchanged binding",
+        patch: {
+          runtimeConfig: {
+            aiConnection: openAiBinding,
+            heartbeat: { enabled: false, intervalSec: 300 },
+          },
+        },
+        intervalSec: 300,
+      },
+      {
+        name: "unchanged binding with reordered fields",
+        patch: {
+          runtimeConfig: {
+            aiConnection: { mode: "responsible_user", provider: "openai", method: "subscription" },
+            heartbeat: { enabled: false, intervalSec: 300 },
+          },
+        },
+        intervalSec: 300,
+      },
+    ])("detaches an inherited binding for an external runtime with $name", async ({ patch, intervalSec }) => {
+      const app = await createApp();
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+          .send({ adapterType: "external_test", ...patch }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.adapterType).toBe("external_test");
+      expect(res.body.runtimeConfig).not.toHaveProperty("aiConnection");
+      expect(res.body.runtimeConfig.heartbeat).toEqual({ enabled: false, intervalSec });
+    });
+
+    it("preserves a compatible binding on an unchanged managed runtime", async () => {
+      const app = await createApp();
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+          .send({ adapterType: "codex_local", runtimeConfig: { heartbeat: { enabled: false } } }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.runtimeConfig.aiConnection).toEqual(openAiBinding);
+    });
+
+    it("rejects an explicitly selected incompatible binding for an external runtime", async () => {
+      const app = await createApp();
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+          .send({
+            adapterType: "external_test",
+            runtimeConfig: {
+              aiConnection: { mode: "responsible_user", method: "subscription", provider: "anthropic" },
+            },
+          }),
+      );
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("compatible");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("preserves a compatible inherited binding when switching to Paperclip Runner", async () => {
+      mockInstanceSettingsService.getExperimental.mockResolvedValue({ enableNativeRunner: true });
+      const app = await createApp();
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+          .send({
+            adapterType: "paperclip_runner",
+            replaceAdapterConfig: true,
+            adapterConfig: { provider: "codex" },
+          }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.runtimeConfig.aiConnection).toEqual(openAiBinding);
+    });
+
+    it("rejects an inherited binding when switching to an incompatible managed runtime", async () => {
+      const app = await createApp();
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+          .send({ adapterType: "claude_local" }),
+      );
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("compatible");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses to switch an existing agent onto a disabled adapter", async () => {
     const { registerServerAdapter } = await import("../adapters/index.js");
     registerServerAdapter(externalAdapter);

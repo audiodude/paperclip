@@ -5539,8 +5539,29 @@ export function agentRoutes(
         adapterConfig: patchData.adapterConfig,
       });
     }
-    if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
-    const nextAiBinding = aiConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection ?? existing.runtimeConfig.aiConnection).data;
+    const supportsManagedAiConnections =
+      requestedAdapterType === "paperclip_runner" ||
+      Object.values(AI_CONNECTION_CAPABILITIES).some((provider) =>
+        Object.values(provider.methods).some((method) =>
+          method?.adapters.includes(requestedAdapterType),
+        ),
+      );
+    const existingAiBinding = aiConnectionBindingSchema.safeParse(existing.runtimeConfig.aiConnection).data;
+    const requestedAiBinding = aiConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection).data;
+    const inheritedAiBinding =
+      requestedRuntimeConfig?.aiConnection === undefined ||
+      (existingAiBinding !== undefined && requestedAiBinding !== undefined &&
+        JSON.stringify(requestedAiBinding) === JSON.stringify(existingAiBinding));
+    if (requestedAdapterType !== existing.adapterType && !supportsManagedAiConnections && inheritedAiBinding) {
+      // External runtimes use their own authentication; do not carry a managed binding across.
+      requestedRuntimeConfig = { ...(requestedRuntimeConfig ?? existing.runtimeConfig) };
+      delete requestedRuntimeConfig.aiConnection;
+    } else if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) {
+      requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
+    }
+    const nextAiBinding = aiConnectionBindingSchema.safeParse(
+      requestedRuntimeConfig ? requestedRuntimeConfig.aiConnection : existing.runtimeConfig.aiConnection,
+    ).data;
     if (nextAiBinding) {
       await assertCanUpdateAgent(req, existing);
       const changed = JSON.stringify(nextAiBinding) !== JSON.stringify(existing.runtimeConfig.aiConnection);
